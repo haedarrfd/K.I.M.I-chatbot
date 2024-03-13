@@ -105,7 +105,6 @@ def main():
         elif file_upload.type == 'text/csv':
           # Agent process to thinking
           response_csv = agent.run(prompt)
-
           # Output message
           container.chat_message('human').write(prompt)
           container.chat_message('assistant').write(f"K.I.M.I : {response_csv}")
@@ -114,7 +113,7 @@ def main():
           st.error('Something wrong, try again!')      
 
   except Exception as err:
-    st.error(f"Something wrong, Please be sure upload a file or the file format!")
+    st.error(f"Something wrong, Please be sure upload a file or the file format! {err}")
 
 
 if __name__ == '__main__':
