@@ -8,7 +8,7 @@ from langchain_community.vectorstores import FAISS
 from langchain.chains.question_answering import load_qa_chain
 from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe_agent
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, auth, firestore, exceptions
 import time
 from datetime import datetime
 from uuid import uuid4
@@ -54,8 +54,8 @@ def uploadFile():
       st.warning('Please upload a file before continue!')
 
     # Sign out button
-    if st.button('Sign Out', type='primary', key='logout'):
-      st.session_state.token = None
+    if st.button('Sign Out', type='primary', key='sign_out'):
+      global_state.email = ''
       st.rerun()
 
     for _space in range(6):
@@ -103,22 +103,34 @@ def handleFileCSV(llm, file):
   return agent
 
 # Add data user to firestore
-def dataUser(id, email, timestamp):
+def dataUser(email: str, timestamp: str):
   # If user already exists in the collection firestore don't add new user
   docs = firebase_firestore.collection('users').where('email', '==', email).stream()
   isUserExists = any(doc.exists for doc in docs)
 
-  if id is not None and email is not None and timestamp is not None:
+  try:
+    user = auth.get_user_by_email(email)
+    user_id = user.uid
+
     if not isUserExists:
-      data = firebase_firestore.collection('users').document().set({
-        'id': str(id),
+      firebase_firestore.collection('users').document(document_id=user_id).set({
+        'email': str(email),
+        'timestamp': str(timestamp)
+      })
+  except exceptions.FirebaseError as e: 
+    user = auth.create_user(email=email)
+    get_user = auth.get_user_by_email(email)
+    user_id = get_user.uid
+
+    if not isUserExists:
+      firebase_firestore.collection('users').document(document_id=user_id).set({
         'email': str(email),
         'timestamp': str(timestamp)
       })
 
-  return 
+  return user
 
-def home(user_email='', user_id=''):
+def home():
   try:
     # Header
     st.markdown('<p style="text-align: center; font-size: 32px; font-weight: 600; margin-bottom: 5px;">K.I.M.I</p>', unsafe_allow_html=True)
@@ -145,7 +157,6 @@ def home(user_email='', user_id=''):
     # User prompt
     prompt = st.chat_input('Send a message to K.I.M.I')
 
-    # Handle loading
     with st.spinner('Loading...'):
       if prompt != '' and prompt is not None:
         # Handle prompt based on PDF file 
@@ -157,13 +168,13 @@ def home(user_email='', user_id=''):
           chain = load_qa_chain(llm, chain_type='stuff')
           response_pdf = chain.run(input_documents=docs, question=prompt)
 
-          # Store the result to firestore
+          # Store the result to chat histories collection
           # firebase_firestore.collection('chat_histories').document().set({
           #   'history_id': str(uuid4()),
-          #   'file_type': upload_file.type,
-          #   'user_input': prompt,
-          #   'bot_response': response_pdf,
-          #   'timestamp': str_date_time
+          #   'file_type': str(upload_file.type),
+          #   'user_input': str(prompt),
+          #   'bot_response': str(response_pdf),
+          #   'timestamp': str(str_date_time)
           # })
 
           # Output message
@@ -175,13 +186,13 @@ def home(user_email='', user_id=''):
           # Agent process to thinking
           response_csv = data_csv.run(prompt)
 
-          # Store the result to firestore
+          # Store the result to chat histories collection
           # firebase_firestore.collection('chat_histories').document().set({
           #   'history_id': str(uuid4()),
-          #   'file_type': upload_file.type,
-          #   'user_input': prompt,
-          #   'bot_response': response_csv,
-          #   'timestamp': str_date_time
+          #   'file_type': str(upload_file.type),
+          #   'user_input': str(prompt),
+          #   'bot_response': str(response_csv),
+          #   'timestamp': str(str_date_time)
           # })
 
           # Output message
@@ -238,52 +249,37 @@ def signInPage(url = ''):
       </div>
 """, height=200)
 
-def main():
+def main(global_state, inner_call=False):
   client: GoogleOAuth2 = GoogleOAuth2(CLIENT_ID, CLIENT_SECRET)
- 
-  if 'user_id' not in st.session_state:
-    st.session_state.user_id = ''
-
-  if 'user_email' not in st.session_state:
-    st.session_state.user_email = ''
+  authorization_url = asyncio.run(
+      get_authorization_url(client=client, redirect_uri=REDIRECT_URI))
   
-  if 'token' not in st.session_state:
-    st.session_state.token = None
-
-  if st.session_state.token is None:
-    # Get auth url
-    authorization_url = asyncio.run(
-      get_authorization_url(_client=client, redirect_uri=REDIRECT_URI))
+  if not global_state.email:
+    signInPage(authorization_url)
     try:
-      code = st.query_params.get('code')
-    except:
+      # Getting token from params
+      token_from_params = get_token_from_params(client=client, redirect_uri=REDIRECT_URI)
+    except Exception as err:
+      return None
+    
+    # Decoding user using jwt
+    user_info = decode_user(token=token_from_params['id_token'])
+    global_state.email = user_info['email']
+    # Store the user to users collection
+    dataUser(global_state.email, str_date_time)
+    st.rerun()
+
+  if inner_call:
+    user_email = global_state.email
+    if not user_email:
       signInPage(authorization_url)
-    else:
-      try:
-        token = asyncio.run(get_access_token(client=client, redirect_uri=REDIRECT_URI, code=code))
-      except:
-        signInPage(authorization_url)
-      else:
-        if token.is_expired():
-          if token.is_expired():
-            signInPage(authorization_url)
-            st.warning('Login session has ended, Please Sign in again!')
-        else:
-          # Store the token to token session 
-          st.session_state.token = token
-          # Run get email and grab the id and email
-          user_id, user_email = asyncio.run(get_email(client=client, token=token['access_token']))
-          st.session_state.user_id = user_id      
-          st.session_state.user_email = user_email
-          home(user_id=st.session_state.user_id, user_email=st.session_state.user_email)
-          # Clear query params
-          st.query_params.clear()
-          # Store user to the firestore collection
-          if user_id is not None and user_email is not None:
-            dataUser(id=st.session_state.user_id, email=st.session_state.user_email, timestamp=str_date_time)
-  else:
-    home(user_id=st.session_state.user_id, user_email=st.session_state.user_email)
+      
+    if user_email:
+      home()
+
+  if not inner_call:
+    signInPage(authorization_url)
 
 
 if __name__ == '__main__':
-  main()
+  main(global_state=global_state, inner_call=True)
