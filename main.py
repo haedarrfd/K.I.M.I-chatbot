@@ -163,7 +163,7 @@ def home(user_email='', user_id=''):
           #   'file_type': upload_file.type,
           #   'user_input': prompt,
           #   'bot_response': response_pdf,
-          #   'timestamps': str_date_time
+          #   'timestamp': str_date_time
           # })
 
           # Output message
@@ -181,7 +181,7 @@ def home(user_email='', user_id=''):
           #   'file_type': upload_file.type,
           #   'user_input': prompt,
           #   'bot_response': response_csv,
-          #   'timestamps': str_date_time
+          #   'timestamp': str_date_time
           # })
 
           # Output message
