@@ -11,7 +11,6 @@ import firebase_admin
 from firebase_admin import credentials, auth, firestore, exceptions
 import time
 from datetime import datetime
-from uuid import uuid4
 from httpx_oauth.clients.google import GoogleOAuth2
 import asyncio
 from Oauth import *
@@ -29,7 +28,7 @@ if not firebase_admin._apps:
   firebase_admin.initialize_app(cred)
 
 # Firestore instance
-firebase_firestore = firestore.client()
+db = firestore.client()
 
 # Sign in with google initialize
 CLIENT_ID = st.secrets['CLIENT_ID']
@@ -43,9 +42,42 @@ date_time = datetime.fromtimestamp(timestamp)
 # convert timestamp to string
 str_date_time = date_time.strftime("%d-%m-%Y, %H:%M:%S")
 
+# Sticky Sidebar
+st.markdown(
+        """
+       <style>
+       [data-testid="stSidebar"][aria-expanded="true"]{
+           min-width: 275px;
+           max-width: 350px;
+       }
+       """,
+        unsafe_allow_html=True)
+
+st.markdown("""
+<style>
+div.stButton > button:first-child {
+    background-color: #D10000;
+    color: #f3f4f6;
+    border: none;
+    padding: 8px 20px;
+    transition: background-color 0.2s ease-in-out;
+} 
+div.stButton > button:hover {
+    background-color: #b30000;
+} 
+</style>""", unsafe_allow_html=True) 
+
 # Handle upload file
-def uploadFile():
+def sidebar():
   with st.sidebar:
+    # User profile
+    user = auth.get_user_by_email(global_state.email)
+    get_user_by_uid = db.collection('users').document(user.uid).get()
+
+    if get_user_by_uid.exists:
+      username = get_user_by_uid.to_dict().get('username')
+      st.markdown(f'''<p style="font-size: 18px; font-weight: 500; margin-bottom: 30px;">Welcome, {username}</p>''', unsafe_allow_html=True)
+    
     # Upload file/document
     file_uploader = st.file_uploader('Upload your document', help='PDF or CSV only', type=['pdf', 'csv'])
 
@@ -58,7 +90,7 @@ def uploadFile():
       global_state.email = ''
       st.rerun()
 
-    for _space in range(6):
+    for _space in range(4):
       st.write("\n")
 
     # Footer
@@ -103,9 +135,9 @@ def handleFileCSV(llm, file):
   return agent
 
 # Add data user to firestore
-def dataUser(email: str, timestamp: str):
+def dataUser(email: str, username: str, timestamp: str):
   # If user already exists in the collection firestore don't add new user
-  docs = firebase_firestore.collection('users').where('email', '==', email).stream()
+  docs = db.collection('users').where('email', '==', email).stream()
   isUserExists = any(doc.exists for doc in docs)
 
   try:
@@ -113,8 +145,9 @@ def dataUser(email: str, timestamp: str):
     user_id = user.uid
 
     if not isUserExists:
-      firebase_firestore.collection('users').document(document_id=user_id).set({
+      db.collection('users').document(document_id=user_id).set({
         'email': str(email),
+        'username': str(username),
         'timestamp': str(timestamp)
       })
   except exceptions.FirebaseError as e: 
@@ -123,8 +156,9 @@ def dataUser(email: str, timestamp: str):
     user_id = get_user.uid
 
     if not isUserExists:
-      firebase_firestore.collection('users').document(document_id=user_id).set({
+      db.collection('users').document(document_id=user_id).set({
         'email': str(email),
+        'username': str(username),
         'timestamp': str(timestamp)
       })
 
@@ -143,7 +177,7 @@ def home():
     llm = OpenAI(temperature=0)
 
     # Instance upload file
-    upload_file = uploadFile()
+    upload_file = sidebar()
 
     if upload_file is not None:
       # Handle PDF file
@@ -159,6 +193,8 @@ def home():
 
     with st.spinner('Loading...'):
       if prompt != '' and prompt is not None:
+        user = auth.get_user_by_email(global_state.email)
+
         # Handle prompt based on PDF file 
         if upload_file.type == 'application/pdf':
           # Similarity search
@@ -169,8 +205,8 @@ def home():
           response_pdf = chain.run(input_documents=docs, question=prompt)
 
           # Store the result to chat histories collection
-          # firebase_firestore.collection('chat_histories').document().set({
-          #   'history_id': str(uuid4()),
+          # db.collection('chat_histories').document().set({
+          #   'user_id': str(user.uid),
           #   'file_type': str(upload_file.type),
           #   'user_input': str(prompt),
           #   'bot_response': str(response_pdf),
@@ -187,8 +223,8 @@ def home():
           response_csv = data_csv.run(prompt)
 
           # Store the result to chat histories collection
-          # firebase_firestore.collection('chat_histories').document().set({
-          #   'history_id': str(uuid4()),
+          # db.collection('chat_histories').document().set({
+          #   'user_id': str(user.uid),
           #   'file_type': str(upload_file.type),
           #   'user_input': str(prompt),
           #   'bot_response': str(response_csv),
@@ -265,8 +301,9 @@ def main(global_state, inner_call=False):
     # Decoding user using jwt
     user_info = decode_user(token=token_from_params['id_token'])
     global_state.email = user_info['email']
+    username = user_info['name']
     # Store the user to users collection
-    dataUser(global_state.email, str_date_time)
+    dataUser(global_state.email, username, str_date_time)
     st.rerun()
 
   if inner_call:
